@@ -5,22 +5,22 @@
         "languageCode": "1033",
         "currencyName": "CAD",
         "developmentEnvironment": {
-            "displayNameBase": "xxx - ",
-            "domainNameBase": "xxx-",
+            "displayNameBase": "BAFC - Raphael - Dev - ",
+            "domainNameBase": "bafc-raph-dev-",
             "skuName": "Sandbox",
-            "developersAzureAdGroupName": "sg-xxx",
+            "developersAzureAdGroupName": "sg-roles-powerplatformadmin",
             "descriptionBase": "Environment for development on the following issue: "
         },
         "buildEnvironment": {
-            "displayNameBase": "xxx - ",
-            "domainNameBase": "xxx-",
+            "displayNameBase": "BAFC - Raphael - Build - ",
+            "domainNameBase": "bafc-raph-build-",
             "skuName": "Sandbox",
-            "azureAdGroupName": "sg-xxx",
+            "azureAdGroupName": "sg-roles-powerplatformadmin",
             "descriptionBase": "Environment for the following solution build: "
         }
     },
     "developmentBranchNameBase": "work/",
-    "pacCliVersion": "1.16.6",
+    "pacCliVersion": "1.21.5",
     "powerAppsMakerPortalBaseUrl": "https://make.preview.powerapps.com/environments/",
     "deploymentSettingsFileNameBase": "DeploymentSettings",
     "customDeploymentSettingsFileNameBase": "CustomDeploymentSettings",
