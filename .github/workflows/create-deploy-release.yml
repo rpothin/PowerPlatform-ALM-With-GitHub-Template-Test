@@ -1,0 +1,319 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: 6-create-deploy-release
+# Create a new release branch
+# Generate a GitHub release for the considered solution with a just-in-time Dataverse Build environment
+# Deploy this solution to the Dataverse Production environment
+
+# Workflow triggered manually providing the mandatory information described below
+on:
+  workflow_dispatch:
+    inputs:
+      solution_name:
+        type: choice
+        description: 'Name of the solution to deploy'
+        required: true
+        options:
+          - PowerPlatformALMWithGitHub
+      solution-major-version:
+        type: string
+        description: 'Majors version of the solution to deploy (ex: 1)'
+        required: true
+      github_release_body:
+        type: string
+        description: 'Text for the body of the GitHub release'
+        required: true
+
+# Concurrency configuration for the current workflow - Put new workflows in queue in pending state
+concurrency: create-deploy-release
+  
+jobs:
+  # Job to initialize a variable for other jobs in the workflow
+  pre-job:
+    runs-on: ubuntu-latest
+    outputs:
+      solution-name: ${{ github.event.inputs.solution_name }}
+      current-date: ${{ steps.current_date.outputs.NOW }}
+      build-environment-display-name-base: ${{ steps.get-configurations.outputs.build-environment-display-name-base }}
+      build-environment-domain-name-base: ${{ steps.get-configurations.outputs.build-environment-domain-name-base }}
+      environment-region: ${{ steps.get-configurations.outputs.environment-region }}
+      build-environment-sku-name: ${{ steps.get-configurations.outputs.build-environment-sku-name }}
+      environment-currency-name: ${{ steps.get-configurations.outputs.environment-currency-name }}
+      environment-language-code: ${{ steps.get-configurations.outputs.environment-language-code }}
+      build-environment-azure-ad-group-name: ${{ steps.get-configurations.outputs.build-environment-azure-ad-group-name }}
+      dataverse-environment-description: '${{ steps.job-outputs-definition.outputs.dataverse-environment-description }}'
+      pac-cli-version: ${{ steps.get-configurations.outputs.pac-cli-version }}
+      deployment-settings-file-name-base: ${{ steps.get-configurations.outputs.deployment-settings-file-name-base }}
+      custom-deployment-settings-file-name-base: ${{ steps.get-configurations.outputs.custom-deployment-settings-file-name-base }}
+      maximum-tries-for-cloud-flows-activation: ${{ steps.get-configurations.outputs.maximum-tries-for-cloud-flows-activation }}
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Set a current date environment variable in the following format: YYYYMMDD
+    - name: Set current date as env variable
+      id: current_date
+      run: echo "::set-output name=NOW::$(date +'%Y%m%d')"
+      shell: pwsh
+    
+    # Action used to checkout the main branch in the current repository
+    #   Community action: https://github.com/actions/checkout
+    - name: Checkout
+      uses: actions/checkout@v3.3.0
+    
+    # Get configurations from a JSON file in the repository
+    - name: Get configurations
+      uses: ./.github/actions/get-configurations
+      id: get-configurations
+
+    # Set dataverse-environment-description job output
+    - name: Set dataverse-environment-description job output
+      id: job-outputs-definition
+      run: |
+        echo "==========  Set dataverse-environment-description job output =========="
+        $dataverseEnvironmentDescription = "${{ steps.get-configurations.outputs.build-environment-description-base }}"
+
+        if ($dataverseEnvironmentDescription -ne '') {
+          $dataverseEnvironmentDescription = "${{ steps.get-configurations.outputs.build-environment-description-base }}${{ github.event.inputs.solution_name }} / release"
+        }
+          
+        echo "Dataverse environment description: $dataverseEnvironmentDescription"
+        echo "::set-output name=dataverse-environment-description::$dataverseEnvironmentDescription"
+      shell: pwsh
+
+  # Job for the creation of the release branch
+  create-release-branch:
+    needs: pre-job
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.release_version.outputs.release_version }}
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Initialize the release version
+    - name: Set release version
+      id: release_version
+      run: |
+        $releaseVersion = '${{ github.event.inputs.solution-major-version }}_${{ needs.pre-job.outputs.current-date }}_${{ github.run_number }}'
+        echo "RELEASE_VERSION=$releaseVersion" >> $Env:GITHUB_ENV
+        echo "::set-output name=release_version::$releaseVersion"
+      shell: pwsh
+    
+    # Create the new release branch
+    #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/create-branch
+    - uses: peterjgrainger/action-create-branch@v2.4.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        branch: release/${{ github.event.inputs.solution_name }}/${{ env.RELEASE_VERSION }}
+
+  # Job for the creation of a just in time Dataverse Build environment
+  create-build-environment:
+    needs: pre-job
+    uses: ./.github/workflows/create-dataverse-environment.yml
+    with:
+      environment-display-name-base: ${{ needs.pre-job.outputs.build-environment-display-name-base }}
+      environment-domain-name-base: ${{ needs.pre-job.outputs.build-environment-domain-name-base }}
+      environment-sku-name: ${{ needs.pre-job.outputs.build-environment-sku-name }}
+      environment-security-group-name: '${{ needs.pre-job.outputs.build-environment-azure-ad-group-name }}'
+      environment-region: ${{ needs.pre-job.outputs.environment-region }}
+      environment-currency-name: ${{ needs.pre-job.outputs.environment-currency-name }}
+      environment-language-code: ${{ needs.pre-job.outputs.environment-language-code }}
+      environment-description: '${{ needs.pre-job.outputs.dataverse-environment-description }}'
+      environment-name-unique-identifier: ${{ needs.pre-job.outputs.current-date }}
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+
+  # Job to build a managed version of a solution using a just-in-time Build environment
+  build-managed-solution:
+    needs: [pre-job, create-release-branch, create-build-environment]
+    uses: ./.github/workflows/build-managed-solution.yml
+    with:
+      solution-name: ${{ needs.pre-job.outputs.solution-name }}
+      solution-major-version: ${{ github.event.inputs.solution-major-version }}
+      branch-to-checkout: release/${{ needs.pre-job.outputs.solution-name }}/${{ needs.create-release-branch.outputs.release_version }}
+      push-changes-to-branch: true
+      upload-unmanaged-solution-to-github-artifact-store: true
+      pac-cli-version: ${{ needs.pre-job.outputs.pac-cli-version }}
+      current-date: ${{ needs.pre-job.outputs.current-date }}
+      build-environment-url: ${{ needs.create-build-environment.outputs.environment-url }}
+      path-to-custom-deployment-settings-file: './Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.custom-deployment-settings-file-name-base }}_validation.json'
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+
+  # Job to delete the just in time Dataverse Build environment
+  delete-build-environment:
+    needs: [create-build-environment, build-managed-solution]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Delete the just in time Dataverse Build environment associated to the issue
+    #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/delete-environment/action.yml
+    - name: Delete environment
+      uses: microsoft/powerplatform-actions/delete-environment@main
+      with:
+        app-id: ${{ secrets.APPLICATION_ID }}
+        client-secret: ${{ secrets.CLIENT_SECRET }}
+        tenant-id: ${{ secrets.TENANT_ID }}
+        environment-url: ${{ needs.create-build-environment.outputs.environment-url }}
+
+  # Job to delete the release branch if solution deployment to Dataverse Build environment fails
+  delete-release-branch:
+    needs: [create-release-branch, build-managed-solution]
+    if: failure()
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Action used to checkout the considered release branch in the current repository
+    #   Community action: https://github.com/actions/checkout
+    - name: Checkout branch release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }}
+      uses: actions/checkout@v3.3.0
+      with:
+        ref: release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }}
+
+    # Delete the Release branch if exists
+    - name: Delete Release branch if exists
+      run: |
+        git config --global user.name 'action@github.com'
+        git config --global user.email 'GitHub Action'
+
+        if (git ls-remote origin release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }}) {
+          git -c http.extraheader="AUTHORIZATION: Bearer ${{ secrets.GITHUB_TOKEN }}" push origin --delete release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }}
+
+          Write-Host "release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }} branch deleted."
+        }
+        else {
+          Write-Host "release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }} branch not found."
+        }
+      shell: pwsh
+
+  # Job to create a GitHub release from the managed solution generate in the previous job
+  create-github-release:
+    needs: [create-release-branch, build-managed-solution]
+    runs-on: ubuntu-latest
+    outputs:
+      create_release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      # Action used to checkout the repository the release branch
+      #   Community action: https://github.com/actions/checkout
+      - name: Checkout branch release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }}
+        uses: actions/checkout@v3.3.0
+        with:
+          ref: release/${{ github.event.inputs.solution_name }}/${{ needs.create-release-branch.outputs.release_version }}
+
+      # Get the unmanaged solutions from the GitHub artifact store
+      #   Action: https://docs.github.com/en/free-pro-team@latest/actions/guides/storing-workflow-data-as-artifacts
+      - name: Fetch the unmanaged solutions from GH artifact store
+        uses: actions/download-artifact@v3
+        with:
+          name: unmanagedSolutions
+          path: out/unmanagedSolutions/
+
+      # Get the managed solutions from the GitHub artifact store
+      #   Action: https://docs.github.com/en/free-pro-team@latest/actions/guides/storing-workflow-data-as-artifacts
+      - name: Fetch the managed solutions from GH artifact store
+        uses: actions/download-artifact@v3
+        with:
+          name: managedSolutions
+          path: out/managedSolutions/
+
+      # Create a GitHub release as draft
+      #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/create-a-release
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.solution_name }}_${{ needs.create-release-branch.outputs.release_version }}
+          release_name: ${{ github.event.inputs.solution_name }} - ${{ needs.create-release-branch.outputs.release_version }}
+          body: |
+            ${{ github.event.inputs.github_release_body }}
+          draft: true
+          prerelease: false
+
+      # Upload the unmanaged solution as asset to the GitHub release created in the previous step
+      #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/upload-assets-to-a-release
+      - name: Upload Release Asset - Unmanaged Solution
+        id: upload-release-asset-unmanaged-solution
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: out/unmanagedSolutions/${{ github.event.inputs.solution_name }}.zip
+          asset_name: ${{ github.event.inputs.solution_name }}.zip
+          asset_content_type: application/zip
+
+      # Upload the managed solution as asset to the GitHub release created in the previous step
+      #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/upload-assets-to-a-release
+      - name: Upload Release Asset - Managed Solution
+        id: upload-release-asset-managed-solution
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: out/managedSolutions/${{ github.event.inputs.solution_name }}_managed.zip
+          asset_name: ${{ github.event.inputs.solution_name }}_managed.zip
+          asset_content_type: application/zip
+
+      # Upload the README.md file as asset to the GitHub release created in a previous step
+      #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/upload-assets-to-a-release
+      - name: Upload Release Asset - README
+        id: upload-release-asset-readme
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: README.md
+          asset_name: README.md
+          asset_content_type: application/md
+
+  # Job to import the managed solution generated in the previous job to the Dataverse Production environment
+  import-solution-to-production:
+    needs: [pre-job, create-release-branch, create-build-environment, build-managed-solution]
+    uses: ./.github/workflows/import-solution.yml
+    with:
+      environment: 'production'
+      gh-artifact-store-name: 'managedSolutions'
+      packed-solution-file-name: '${{ needs.pre-job.outputs.solution-name }}_managed'
+      solution-name: ${{ needs.pre-job.outputs.solution-name }}
+      path-to-deployment-settings-file: 'Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.deployment-settings-file-name-base }}_production.json'
+      path-to-custom-deployment-settings-file: './Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.custom-deployment-settings-file-name-base }}_production.json'
+      maximum-tries-for-cloud-flows-activation: ${{ needs.pre-job.outputs.maximum-tries-for-cloud-flows-activation }}
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+      # DATAVERSE_ENVIRONMENT_URL: URL of the targeted Dataverse environment
+      # DATAVERSE_ENVIRONMENT_DISPLAY_NAME: Display name of the targeted Dataverse environment
+      # SOLUTION_COMPONENTS_OWNER_EMAIL: Email of the user account considered for the ownership of solution components (ex: cloud flows)
+
+  # Job to publish the GitHub release created earlier in the workflow
+  publish-release:
+    needs: [create-github-release, import-solution-to-production]
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Publish the GitHub release created in the create-github-release job
+    #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/publish-release
+    - uses: eregon/publish-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        release_id: ${{ needs.create-github-release.outputs.create_release_id }}

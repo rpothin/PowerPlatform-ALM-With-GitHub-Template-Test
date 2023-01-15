@@ -1,0 +1,196 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: 5-import-solution-to-validation
+# Upload the solutions to the GitHub workflow run artifacts and deploy them to the Dataverse Validation environment
+
+# Workflow that is triggered by a push of updates in the "Solutions/" folder on the main branch
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Solutions/**'
+      - 'Configurations/**'
+      - '!.github/**'
+      - '!Configurations/configurations.json'
+      - '!Documentation/**'
+      - '!Scripts/**'
+      - '!.all-contributorsrc'
+      - '!.gitignore'
+      - '!CHANGELOG.md'
+      - '!CODE_OF_CONDUCT.md'
+      - '!CONTRIBUTING.md'
+      - '!LICENSE'
+      - '!README.md'
+
+# Concurrency configuration for the current workflow - Put new workflows in queue in pending state
+concurrency: import-solution-to-validation
+
+jobs:
+  # Job to initialize a variable for other jobs in the workflow
+  pre-job:
+    runs-on: ubuntu-latest
+    outputs:
+      solution-name: '${{ steps.changed-solution.outputs.solution_name }}'
+      current-date: ${{ steps.current_date.outputs.NOW }}
+      build-environment-display-name-base: ${{ steps.get-configurations.outputs.build-environment-display-name-base }}
+      build-environment-domain-name-base: ${{ steps.get-configurations.outputs.build-environment-domain-name-base }}
+      environment-region: ${{ steps.get-configurations.outputs.environment-region }}
+      build-environment-sku-name: ${{ steps.get-configurations.outputs.build-environment-sku-name }}
+      environment-currency-name: ${{ steps.get-configurations.outputs.environment-currency-name }}
+      environment-language-code: ${{ steps.get-configurations.outputs.environment-language-code }}
+      build-environment-azure-ad-group-name: ${{ steps.get-configurations.outputs.build-environment-azure-ad-group-name }}
+      dataverse-environment-description: '${{ steps.job-outputs-definition.outputs.dataverse-environment-description }}'
+      pac-cli-version: ${{ steps.get-configurations.outputs.pac-cli-version }}
+      deployment-settings-file-name-base: ${{ steps.get-configurations.outputs.deployment-settings-file-name-base }}
+      custom-deployment-settings-file-name-base: ${{ steps.get-configurations.outputs.custom-deployment-settings-file-name-base }}
+      maximum-tries-for-cloud-flows-activation: ${{ steps.get-configurations.outputs.maximum-tries-for-cloud-flows-activation }}
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Set a current date environment variable in the following format: YYYYMMDD
+    - name: Set current date as env variable
+      id: current_date
+      run: echo "::set-output name=NOW::$(date +'%Y%m%d')"
+      shell: pwsh
+    
+    # Action used to checkout the main branch in the current repository
+    #   Community action: https://github.com/actions/checkout
+    - name: Checkout
+      uses: actions/checkout@v3.3.0
+      with:
+        fetch-depth: 0
+    
+    # Get configurations from a JSON file in the repository
+    - name: Get configurations
+      uses: ./.github/actions/get-configurations
+      id: get-configurations
+
+    # Set dataverse-environment-description job output
+    - name: Set dataverse-environment-description job output
+      id: job-outputs-definition
+      run: |
+        echo "==========  Set dataverse-environment-description job output =========="
+        $dataverseEnvironmentDescription = "${{ steps.get-configurations.outputs.build-environment-description-base }}"
+
+        if ($dataverseEnvironmentDescription -ne '') {
+          $dataverseEnvironmentDescription = "${{ steps.get-configurations.outputs.build-environment-description-base }}${{ env.solution_name }} / main"
+        }
+          
+        echo "Dataverse environment description: $dataverseEnvironmentDescription"
+        echo "::set-output name=dataverse-environment-description::$dataverseEnvironmentDescription"
+      shell: pwsh
+
+    # Get files changed in the context of the pull request
+    #   Action: https://github.com/marketplace/actions/changed-files
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v35.4.1
+
+    # Get changed solution from changed files
+    - name: Get changed solution
+      id: changed-solution
+      run: |
+        # Variables
+        $changedSolutionFound = $false
+        $filesChangedTemp = "${{ steps.changed-files.outputs.all_changed_files }}"
+        $filesChanged = $filesChangedTemp.Split(" ")
+        $solutionName = ""
+        $solutionNameBackup = ""
+
+        Write-Host "========== Search updated solution in changed files =========="
+        foreach ($fileChanged in $filesChanged) {
+          Write-Host "$fileChanged"
+          $fileChangedArray = $fileChanged.Split("/")
+
+          if ($fileChanged.Contains("Solutions/") -and (-not($changedSolutionFound))) {
+            $solutionName = $fileChangedArray[1]
+          }
+
+          if ($fileChanged.Contains("Configurations/") -and (-not($changedSolutionFound))) {
+            $solutionNameBackup = $fileChangedArray[1]
+          }
+        }
+
+        if ($solutionName -eq "") {
+          Write-Host "⚠ Only configurations udpated"
+          $solutionName = $solutionNameBackup
+        }
+
+        echo "Solution name: $solutionName"
+        echo "::set-output name=solution_name::$solutionName"
+      shell: pwsh
+
+  # Job for the creation of a just in time Dataverse Build environment
+  create-build-environment:
+    needs: pre-job
+    uses: ./.github/workflows/create-dataverse-environment.yml
+    with:
+      environment-display-name-base: ${{ needs.pre-job.outputs.build-environment-display-name-base }}
+      environment-domain-name-base: ${{ needs.pre-job.outputs.build-environment-domain-name-base }}
+      environment-sku-name: ${{ needs.pre-job.outputs.build-environment-sku-name }}
+      environment-security-group-name: '${{ needs.pre-job.outputs.build-environment-azure-ad-group-name }}'
+      environment-region: ${{ needs.pre-job.outputs.environment-region }}
+      environment-currency-name: ${{ needs.pre-job.outputs.environment-currency-name }}
+      environment-language-code: ${{ needs.pre-job.outputs.environment-language-code }}
+      environment-description: '${{ needs.pre-job.outputs.dataverse-environment-description }}'
+      environment-name-unique-identifier: ${{ needs.pre-job.outputs.current-date }}
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+
+  # Job to build a managed version of a solution using a just-in-time Build environment
+  build-managed-solution:
+    needs: [pre-job, create-build-environment]
+    uses: ./.github/workflows/build-managed-solution.yml
+    with:
+      solution-name: ${{ needs.pre-job.outputs.solution-name }}
+      pac-cli-version: ${{ needs.pre-job.outputs.pac-cli-version }}
+      current-date: ${{ needs.pre-job.outputs.current-date }}
+      build-environment-url: ${{ needs.create-build-environment.outputs.environment-url }}
+      path-to-custom-deployment-settings-file: './Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.custom-deployment-settings-file-name-base }}_validation.json'
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+
+  # Job to import the managed solution generated in the previous job to the Dataverse Validation environment
+  import-solution-to-validation:
+    needs: [pre-job, create-build-environment, build-managed-solution]
+    uses: ./.github/workflows/import-solution.yml
+    with:
+      environment: 'validation'
+      gh-artifact-store-name: 'managedSolutions'
+      packed-solution-file-name: '${{ needs.pre-job.outputs.solution-name }}_managed'
+      solution-name: ${{ needs.pre-job.outputs.solution-name }}
+      path-to-deployment-settings-file: 'Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.deployment-settings-file-name-base }}_validation.json'
+      path-to-custom-deployment-settings-file: './Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.custom-deployment-settings-file-name-base }}_validation.json'
+      maximum-tries-for-cloud-flows-activation: ${{ needs.pre-job.outputs.maximum-tries-for-cloud-flows-activation }}
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+      # DATAVERSE_ENVIRONMENT_URL: URL of the targeted Dataverse environment
+      # DATAVERSE_ENVIRONMENT_DISPLAY_NAME: Display name of the targeted Dataverse environment
+      # SOLUTION_COMPONENTS_OWNER_EMAIL: Email of the user account considered for the ownership of solution components (ex: cloud flows)
+
+  # Job to delete the just in time Dataverse Build environment
+  delete-build-environment:
+    needs: [create-build-environment, build-managed-solution]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Delete the just in time Dataverse Build environment created in this workflow
+    #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/delete-environment/action.yml
+    - name: Delete environment
+      uses: microsoft/powerplatform-actions/delete-environment@main
+      with:
+        app-id: ${{ secrets.APPLICATION_ID }}
+        client-secret: ${{ secrets.CLIENT_SECRET }}
+        tenant-id: ${{ secrets.TENANT_ID }}
+        environment-url: ${{ needs.create-build-environment.outputs.environment-url }}

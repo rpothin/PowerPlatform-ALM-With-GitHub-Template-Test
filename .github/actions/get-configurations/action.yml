@@ -1,0 +1,177 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: 'Get configurations'
+
+description: 'Get configurations from a JSON file in the repository'
+
+inputs:
+  path-to-configuration-file:
+    description: 'Absolute path to the configuration file'
+    required: false
+    default: 'Configurations\configurations.json'
+
+outputs:
+  environment-region:
+    description: "Environment region"
+    value: ${{ steps.get-configurations.outputs.environment-region }}
+  environment-url-region-code:
+    description: "Code of the region in the URL of the environment"
+    value: ${{ steps.get-configurations.outputs.environment-url-region-code }}
+  environment-language-code:
+    description: "Environment language"
+    value: ${{ steps.get-configurations.outputs.environment-language-code }}
+  environment-currency-name:
+    description: "Environment currency"
+    value: ${{ steps.get-configurations.outputs.environment-currency-name }}
+  development-environment-display-name-base:
+    description: "Base of the display name for a development environment"
+    value: ${{ steps.get-configurations.outputs.development-environment-display-name-base }}
+  development-environment-domain-name-base:
+    description: "Base of the domain name for a development environment"
+    value: ${{ steps.get-configurations.outputs.development-environment-domain-name-base }}
+  development-environment-sku-name:
+    description: "Name of the SKU for a development environment"
+    value: ${{ steps.get-configurations.outputs.development-environment-sku-name }}
+  developers-azure-ad-group-name:
+    description: "Name of the Azure AD group where the developers are member of"
+    value: ${{ steps.get-configurations.outputs.developers-azure-ad-group-name }}
+  development-environment-description-base:
+    description: "Base of the description for a development environment"
+    value: ${{ steps.get-configurations.outputs.development-environment-description-base }}
+  build-environment-display-name-base:
+    description: "Base of the display name for a build environment"
+    value: ${{ steps.get-configurations.outputs.build-environment-display-name-base }}
+  build-environment-domain-name-base:
+    description: "Base of the domain name for a build environment"
+    value: ${{ steps.get-configurations.outputs.build-environment-domain-name-base }}
+  build-environment-sku-name:
+    description: "Name of the SKU for a build environment"
+    value: ${{ steps.get-configurations.outputs.build-environment-sku-name }}
+  build-environment-azure-ad-group-name:
+    description: "Name of the Azure AD group used to restrict the access to a build environment"
+    value: ${{ steps.get-configurations.outputs.build-environment-azure-ad-group-name }}
+  build-environment-description-base:
+    description: "Base of the description for a build environment"
+    value: ${{ steps.get-configurations.outputs.build-environment-description-base }}
+  development-branch-name-base:
+    description: "Base of the name for a development branch"
+    value: ${{ steps.get-configurations.outputs.development-branch-name-base }}
+  pac-cli-version:
+    description: "PAC CLI version"
+    value: ${{ steps.get-configurations.outputs.pac-cli-version }}
+  powerapps-maker-portal-base-url:
+    description: "Base URL of the Power Apps maker portal"
+    value: ${{ steps.get-configurations.outputs.powerapps-maker-portal-base-url }}
+  deployment-settings-file-name-base:
+    description: "Base of the name for a deployment settings file"
+    value: ${{ steps.get-configurations.outputs.deployment-settings-file-name-base }}
+  custom-deployment-settings-file-name-base:
+    description: "Base of the name for a custom deployment settings file"
+    value: ${{ steps.get-configurations.outputs.custom-deployment-settings-file-name-base }}
+  maximum-tries-for-cloud-flows-activation:
+    description: "Maximum tries allowed for the activation of the cloud flows post solution deployment"
+    value: ${{ steps.get-configurations.outputs.maximum-tries-for-cloud-flows-activation }}
+  solution-checker-output-directory:
+    description: "Output directory for the results of the execution of the solution checker"
+    value: ${{ steps.get-configurations.outputs.solution-checker-output-directory }}
+  solution-checker-geography:
+    description: "Condiered geography for the execution of the solution checker"
+    value: ${{ steps.get-configurations.outputs.solution-checker-geography }}
+  solution-checker-maximum-number-high-severity-points:
+    description: "Maximum number of the high severity points allowed in the results of the execution of the solution checker"
+    value: ${{ steps.get-configurations.outputs.solution-checker-maximum-number-high-severity-points }}
+  solution-checker-maximum-number-medium-severity-points:
+    description: "Maximum number of the medium severity points allowed in the results of the execution of the solution checker"
+    value: ${{ steps.get-configurations.outputs.solution-checker-maximum-number-medium-severity-points }}
+
+runs:
+  using: "composite"
+  steps:
+    # Get configurations from a JSON file in the repository
+    - name: Get configurations
+      id: get-configurations
+      run:  |
+        # Set variables
+        Write-Host "Set variables"
+        $ConfigurationFilePath = "${{ inputs.path-to-configuration-file }}"
+
+        # Test the path provided to the file with the configurations
+        Write-Host "Test the path provided to the file with the configuration: $ConfigurationFilePath"
+        $testPathResult = Test-Path $ConfigurationFilePath
+        if(!$testPathResult) {
+          Write-Error -Message "Following path to configuration file not valid: $ConfigurationFilePath" -ErrorAction Stop
+        }
+        
+        # Extract configuration from the file
+        Write-Host "Get content from file with the configurations in the following location: $ConfigurationFilePath"
+        try {
+          Write-Host "Try to call the Get-Content command"
+          $configurations = Get-Content $ConfigurationFilePath -ErrorVariable getConfigurationError -ErrorAction Stop | ConvertFrom-Json
+        }
+        catch {
+          Write-Error -Message "Error in the extraction of the configuration from the considered file ($ConfigurationFilePath): $getConfigurationError" -ErrorAction Stop
+        }
+
+        # Convert configurations from the file to variables
+        Write-Host "Convert configurations from the file to variables"
+        $environmentRegion = $configurations.environment.region
+        $environmentUrlRegionCode = $configurations.environment.urlRegionCode
+        $environmentLanguageCode = $configurations.environment.languageCode
+        $environmentCurrencyName = $configurations.environment.currencyName
+
+        $developmentEnvironmentDisplayNameBase = $configurations.environment.developmentEnvironment.displayNameBase
+        $developmentEnvironmentDomainNameBase = $configurations.environment.developmentEnvironment.domainNameBase
+        $developmentEnvironmentSkuName = $configurations.environment.developmentEnvironment.skuName
+        $developersAzureAdGroupName = $configurations.environment.developmentEnvironment.developersAzureAdGroupName
+        $developmentEnvironmentDescriptionBase = $configurations.environment.developmentEnvironment.descriptionBase
+
+        $buildEnvironmentDisplayNameBase = $configurations.environment.buildEnvironment.displayNameBase
+        $buildEnvironmentDomainNameBase = $configurations.environment.buildEnvironment.domainNameBase
+        $buildEnvironmentSkuName = $configurations.environment.buildEnvironment.skuName
+        $buildEnvironmentAzureAdGroupName = $configurations.environment.buildEnvironment.azureAdGroupName
+        $buildEnvironmentDescriptionBase = $configurations.environment.buildEnvironment.descriptionBase
+
+        $developmentBranchNameBase = $configurations.developmentBranchNameBase
+        $pacCliVersion = $configurations.pacCliVersion
+        $powerAppsMakerPortalBaseUrl = $configurations.powerAppsMakerPortalBaseUrl
+        $deploymentSettingsFileNameBase = $configurations.deploymentSettingsFileNameBase
+        $customDeploymentSettingsFileNameBase = $configurations.customDeploymentSettingsFileNameBase
+        $maximumTriesForCloudFlowsActivation = $configurations.maximumTriesForCloudFlowsActivation
+
+        $solutionCheckerOutputDirectory = $configurations.solutionChecker.outputDirectory
+        $solutionCheckerGeography = $configurations.solutionChecker.geography
+        $solutionCheckerMaximumNumberHighSeverityPoints = $configurations.solutionChecker.maximumNumberHighSeverityPoints
+        $solutionCheckerMaximumNumberMediumSeverityPoints = $configurations.solutionChecker.maximumNumberMediumSeverityPoints
+
+        # Generate outputs
+        Write-Host "Generate outputs for the different configurations in the file"
+        echo "::set-output name=environment-region::$environmentRegion"
+        echo "::set-output name=environment-url-region-code::$environmentUrlRegionCode"
+        echo "::set-output name=environment-language-code::$environmentLanguageCode"
+        echo "::set-output name=environment-currency-name::$environmentCurrencyName"
+        
+        echo "::set-output name=development-environment-display-name-base::$developmentEnvironmentDisplayNameBase"
+        echo "::set-output name=development-environment-domain-name-base::$developmentEnvironmentDomainNameBase"
+        echo "::set-output name=development-environment-sku-name::$developmentEnvironmentSkuName"
+        echo "::set-output name=developers-azure-ad-group-name::$developersAzureAdGroupName"
+        echo "::set-output name=development-environment-description-base::$developmentEnvironmentDescriptionBase"
+
+        echo "::set-output name=build-environment-display-name-base::$buildEnvironmentDisplayNameBase"
+        echo "::set-output name=build-environment-domain-name-base::$buildEnvironmentDomainNameBase"
+        echo "::set-output name=build-environment-sku-name::$buildEnvironmentSkuName"
+        echo "::set-output name=build-environment-azure-ad-group-name::$buildEnvironmentAzureAdGroupName"
+        echo "::set-output name=build-environment-description-base::$buildEnvironmentDescriptionBase"
+        
+        echo "::set-output name=development-branch-name-base::$developmentBranchNameBase"
+        echo "::set-output name=pac-cli-version::$pacCliVersion"
+        echo "::set-output name=powerapps-maker-portal-base-url::$powerAppsMakerPortalBaseUrl"
+        echo "::set-output name=deployment-settings-file-name-base::$deploymentSettingsFileNameBase"
+        echo "::set-output name=custom-deployment-settings-file-name-base::$customDeploymentSettingsFileNameBase"
+        echo "::set-output name=maximum-tries-for-cloud-flows-activation::$maximumTriesForCloudFlowsActivation"
+        
+        echo "::set-output name=solution-checker-output-directory::$solutionCheckerOutputDirectory"
+        echo "::set-output name=solution-checker-geography::$solutionCheckerGeography"
+        echo "::set-output name=solution-checker-maximum-number-high-severity-points::$solutionCheckerMaximumNumberHighSeverityPoints"
+        echo "::set-output name=solution-checker-maximum-number-medium-severity-points::$solutionCheckerMaximumNumberMediumSeverityPoints"
+      shell: pwsh

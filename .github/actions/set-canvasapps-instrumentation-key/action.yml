@@ -1,0 +1,102 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: 'Set canvas apps instrumentation key'
+
+description: 'Set canvas apps instrumentation key based on a configuration for the considered solution and the considered environment'
+
+inputs:
+  path-to-custom-deployment-settings-file:
+    description: 'Path to custom deployment settings file (for things like canvas apps instrumentation key)'
+    required: true
+  solution-name:
+    description: 'Name of the considered solution (not the Display Name)'
+    required: true
+  pac-cli-version:
+      description: 'Considered version of PAC CLI for the pack of the canvas apps'
+      required: true
+
+runs:
+  using: "composite"
+  steps:
+    # Set canvas apps instrumentation key
+    - name: Set canvas apps instrumentation key
+      id: set-canvasapps-instrumentation-key
+      run:  |
+        # Set variables
+        Write-Host "Set variables"
+        $ConfigurationFilePath = "${{ inputs.path-to-custom-deployment-settings-file }}"
+
+        # Check if there are canvas apps in the considered solution
+        $canvasAppsFolder = "Solutions/${{ inputs.solution-name }}/CanvasApps"
+        $canvasAppsFolderExist = Test-Path $canvasAppsFolder
+        if (!$canvasAppsFolderExist) {
+          Write-Host "No canvas apps in the following solution: ${{ inputs.solution-name }}"
+        }
+        else {
+          # Test the path provided to the file with the canvas apps instrumentation key
+          Write-Host "Test the path provided to the file with the canvas apps instrumentation key: $ConfigurationFilePath"
+          $testPathResult = Test-Path $ConfigurationFilePath
+          if (!$testPathResult) {
+            Write-Error -Message "Following path to configuration file not valid: $ConfigurationFilePath" -ErrorAction Stop
+          }
+
+          # Extract canvas apps instrumentation key from the configuration file
+          Write-Host "Get canvas apps instrumentation key from the configuration in the following location: $ConfigurationFilePath"
+          try {
+            Write-Host "Try to call the Get-Content command"
+            $configurations = Get-Content $ConfigurationFilePath -ErrorVariable getConfigurationError -ErrorAction Stop | ConvertFrom-Json
+
+            $canvasAppsInstrumentationKey = $configurations.canvasApps.instrumentationKey
+            Write-Host "Canvas apps instrumentation key: $canvasAppsInstrumentationKey"
+          }
+          catch {
+            Write-Error -Message "Error in the extraction of the canvas apps instrumentation key from the considered configuration file ($ConfigurationFilePath): $getConfigurationError" -ErrorAction Stop
+          }
+
+          # For all relevant canvas apps (with an "AppInsightsKey.json" file) in the considered solution, set canvas apps instrumentation key
+          Get-ChildItem -Path "Solutions/${{ inputs.solution-name }}/CanvasApps/src" -Recurse -Filter AppInsightsKey.json | 
+          ForEach-Object {
+            $appInsightsKeyFilePath = $_.FullName
+            Write-Host "Set canvas apps instrumentation key for the following canvas app: $appInsightsKeyFilePath"
+
+            $appInsightsKeyFileContent = Get-Content $appInsightsKeyFilePath | ConvertFrom-Json
+            Write-Host "Canvas apps instrumentation key configuration before update: $appInsightsKeyFileContent"
+
+            $appInsightsKeyFileContent.InstrumentationKey = $canvasAppsInstrumentationKey
+            Write-Host "Canvas apps instrumentation key configuration after update: $appInsightsKeyFileContent"
+
+            $appInsightsKeyFileContent | ConvertTo-Json | set-content $appInsightsKeyFilePath
+          }
+        }
+      shell: pwsh
+
+    # ⚠ WOARKAROUND regarding a potential issue in the pack of canvas apps with the current version of the out of the box action
+    # "Microsoft.PowerApps.CLI" setup
+    - name: PowerApps CLI setup
+      run: |
+        # "Microsoft.PowerApps.CLI" setup
+        $nugetPackage = "Microsoft.PowerApps.CLI"
+        $nugetPackageVersion = "${{ inputs.pac-cli-version }}"
+        $outFolder = "pac"
+
+        nuget install $nugetPackage -Version $nugetPackageVersion -OutputDirectory $outFolder
+        
+        $pacNugetFolder = Get-ChildItem $outFolder | Where-Object {$_.Name -match $nugetPackage + "."}
+
+        $pacPath = $pacNugetFolder.FullName + "/tools"
+
+        echo "POWERAPPS_CLI_PATH=$pacPath" >> $Env:GITHUB_ENV
+      shell: pwsh
+
+    # Manual pac solution pack with processCanvasApps
+    - name: Pack solution
+      run:  |
+        $env:PATH = $env:PATH + ";" + "${{ env.POWERAPPS_CLI_PATH }}"
+
+        # Go to the solution folder
+        cd Solutions/${{ inputs.solution-name }}
+
+        # Execute pac solution pack to generate the latest version of the the msapp files
+        pac solution pack --zipfile ${{ inputs.solution-name }}.zip --processCanvasApps
+      shell: pwsh

@@ -1,0 +1,144 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: 2-export-and-unpack-solution
+# Export solution from a Dataverse Dev environment and unpack it in the associated Dev branch
+
+# Workflow triggered manually providing the following inputs
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        type: string
+        description: 'Number of the issue you are working on'
+        required: true
+      solution_name:
+        type: choice
+        description: 'Name of the solution you are working on'
+        required: true
+        options:
+          - PowerPlatformALMWithGitHub
+
+# Concurrency configuration for the current workflow - Keep only the latest workflow queued for the considered group and the considered issue number (input)
+concurrency:
+  group: export-and-unpack-solution-${{ github.event.inputs.issue_number }}
+  cancel-in-progress: true
+
+jobs:
+  # Job for the export of the considered solution from the dev environment associated to the issue
+  export-from-dev:
+    runs-on: windows-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Action used to checkout the main branch in the current repository
+    #   Community action: https://github.com/actions/checkout
+    - name: Checkout
+      uses: actions/checkout@v3.3.0
+    
+    # Get configurations from a JSON file in the repository
+    - name: Get configurations
+      uses: ./.github/actions/get-configurations
+      id: get-configurations
+    
+    # Action used to checkout the considered development branch in the current repository
+    #   Community action: https://github.com/actions/checkout
+    - name: Checkout branch ${{ steps.get-configurations.outputs.development-branch-name-base }}${{ github.event.inputs.issue_number }}
+      uses: actions/checkout@v3.3.0
+      with:
+        ref: ${{ steps.get-configurations.outputs.development-branch-name-base }}${{ github.event.inputs.issue_number }}
+    
+    # Publish all customizations on the Dataverse Dev environment
+    #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/publish-solution/action.yml
+    - name: Publish solutions
+      uses: microsoft/powerplatform-actions/publish-solution@main
+      with:
+        app-id: ${{ secrets.APPLICATION_ID }}
+        client-secret: ${{ secrets.CLIENT_SECRET }}
+        tenant-id: ${{ secrets.TENANT_ID }}
+        environment-url: https://${{ steps.get-configurations.outputs.development-environment-domain-name-base }}${{ github.event.inputs.issue_number }}.${{ steps.get-configurations.outputs.environment-url-region-code }}.dynamics.com
+
+    # Export the considered solution as unmanaged from the Dataverse Dev environment
+    #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/export-solution/action.yml
+    - name: Export solution as unmanaged
+      uses: microsoft/powerplatform-actions/export-solution@main
+      with:
+        app-id: ${{ secrets.APPLICATION_ID }}
+        client-secret: ${{ secrets.CLIENT_SECRET }}
+        tenant-id: ${{ secrets.TENANT_ID }}
+        environment-url: https://${{ steps.get-configurations.outputs.development-environment-domain-name-base }}${{ github.event.inputs.issue_number }}.${{ steps.get-configurations.outputs.environment-url-region-code }}.dynamics.com
+        solution-name: ${{ github.event.inputs.solution_name }}
+        solution-output-file: out/exported/${{ github.event.inputs.solution_name }}.zip
+        managed: false
+
+    # Unpack the unmanaged solution exported in the previous step
+    #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/unpack-solution/action.yml
+    - name: Unpack unmanaged solution
+      uses: microsoft/powerplatform-actions/unpack-solution@main
+      with:
+        solution-file: out/exported/${{ github.event.inputs.solution_name }}.zip
+        solution-folder: Solutions/${{ github.event.inputs.solution_name }}
+        solution-type: 'Unmanaged'
+        overwrite-files: true
+        process-canvas-apps: true
+
+    # ⚠ WOARKAROUND regarding a potential issue in the unpack of canvas apps with the current version of the action
+    # Unpack the unmanaged solution exported in the previous step
+    # "Microsoft.PowerApps.CLI" setup
+    # "Microsoft.PowerApps.CLI" setup
+    - name: PowerApps CLI setup
+      run: |
+        $nugetPackage = "Microsoft.PowerApps.CLI"
+        $nugetPackageVersion = "${{ steps.get-configurations.outputs.pac-cli-version }}"
+        $outFolder = "pac"
+
+        nuget install $nugetPackage -Version $nugetPackageVersion -OutputDirectory $outFolder
+        
+        $pacNugetFolder = Get-ChildItem $outFolder | Where-Object {$_.Name -match $nugetPackage + "."}
+
+        $pacPath = $pacNugetFolder.FullName + "/tools"
+
+        echo "POWERAPPS_CLI_PATH=$pacPath" >> $Env:GITHUB_ENV
+      shell: pwsh
+
+    - name: Unpack solution (workaround)
+      run:  |
+        $env:PATH = $env:PATH + ";" + "${{ env.POWERAPPS_CLI_PATH }}"
+
+        # Execute unpakc solution
+        pac solution unpack --zipfile out/exported/${{ github.event.inputs.solution_name }}.zip --folder Solutions/${{ github.event.inputs.solution_name }} --processCanvasApps
+      shell: pwsh
+
+    # Reset the solution version in the Solution.xml file
+    - name: Set solution version
+      run: |
+        $file = 'Solutions\${{ github.event.inputs.solution_name }}\Other\Solution.xml'
+        $regex = '<Version>[\s\S]*?<\/Version>'
+        (Get-Content $file) -replace $regex, '<Version>1.0.0</Version>' | Set-Content $file
+      shell: pwsh
+
+    # Generate deployment settings template file from packed solution using PAC CLI
+    - name: Generate deployment settings file
+      run: |
+        $env:PATH = $env:PATH + ";" + "${{ env.POWERAPPS_CLI_PATH }}"
+        
+        pac solution create-settings --solution-zip out/exported/${{ github.event.inputs.solution_name }}.zip --settings-file Configurations/${{ github.event.inputs.solution_name }}/${{ steps.get-configurations.outputs.deployment-settings-file-name-base }}Template.json
+      shell: pwsh
+
+    # Delete out folder with solution exported in zip format
+    - name: Delete exported solution (zip)
+      run: |
+        Remove-Item 'out' -Recurse
+      shell: pwsh
+
+    # Push changes to Dev branch
+    - name: Push changes to Dev branch
+      run: |
+        git config --global user.name 'action@github.com'
+        git config --global user.email 'GitHub Action'
+
+        git add --all
+        git commit -m "Update of ${{ github.event.inputs.solution_name }} solution - Run ${{ github.run_number }}"
+        git  -c http.extraheader="AUTHORIZATION: Bearer ${{ secrets.GITHUB_TOKEN }}" push origin ${{ steps.get-configurations.outputs.development-branch-name-base }}${{ github.event.inputs.issue_number }}
+      shell: pwsh

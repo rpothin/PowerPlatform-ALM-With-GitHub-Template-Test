@@ -1,0 +1,34 @@
+{
+    "environment": {
+        "region": "canada",
+        "urlRegionCode": "crm3",
+        "languageCode": "1033",
+        "currencyName": "CAD",
+        "developmentEnvironment": {
+            "displayNameBase": "xxx - ",
+            "domainNameBase": "xxx-",
+            "skuName": "Sandbox",
+            "developersAzureAdGroupName": "sg-xxx",
+            "descriptionBase": "Environment for development on the following issue: "
+        },
+        "buildEnvironment": {
+            "displayNameBase": "xxx - ",
+            "domainNameBase": "xxx-",
+            "skuName": "Sandbox",
+            "azureAdGroupName": "sg-xxx",
+            "descriptionBase": "Environment for the following solution build: "
+        }
+    },
+    "developmentBranchNameBase": "work/",
+    "pacCliVersion": "1.16.6",
+    "powerAppsMakerPortalBaseUrl": "https://make.preview.powerapps.com/environments/",
+    "deploymentSettingsFileNameBase": "DeploymentSettings",
+    "customDeploymentSettingsFileNameBase": "CustomDeploymentSettings",
+    "maximumTriesForCloudFlowsActivation": 3,
+    "solutionChecker": {
+        "outputDirectory": "solutionCheckerResults/",
+        "geography": "Canada",
+        "maximumNumberHighSeverityPoints": 0,
+        "maximumNumberMediumSeverityPoints": 5
+    }
+}

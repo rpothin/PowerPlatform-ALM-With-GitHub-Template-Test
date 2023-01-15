@@ -1,0 +1,278 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: 3-solution-quality-check-on-pr
+# Check the quality of a solution on a pull request targeting the main branch
+
+# Workflow triggered by a pull request targeting the main branch
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Solutions/**'
+      - 'Configurations/**'
+      - '!.github/**'
+      - '!Configurations/configurations.json'
+      - '!Documentation/**'
+      - '!Scripts/**'
+      - '!.all-contributorsrc'
+      - '!.gitignore'
+      - '!CHANGELOG.md'
+      - '!CODE_OF_CONDUCT.md'
+      - '!CONTRIBUTING.md'
+      - '!LICENSE'
+      - '!README.md'
+
+# Concurrency configuration for the current workflow - Keep only the latest workflow queued for the considered group and the considered pull request
+concurrency:
+  group: solution-quality-check-on-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Job to initialize a variable for other jobs in the workflow
+  pre-job:
+    runs-on: ubuntu-latest
+    outputs:
+      solution-name: '${{ steps.changed-solution.outputs.solution_name }}'
+      current-date: ${{ steps.current_date.outputs.NOW }}
+      build-environment-display-name-base: ${{ steps.get-configurations.outputs.build-environment-display-name-base }}
+      build-environment-domain-name-base: ${{ steps.get-configurations.outputs.build-environment-domain-name-base }}
+      environment-region: ${{ steps.get-configurations.outputs.environment-region }}
+      build-environment-sku-name: ${{ steps.get-configurations.outputs.build-environment-sku-name }}
+      environment-currency-name: ${{ steps.get-configurations.outputs.environment-currency-name }}
+      environment-language-code: ${{ steps.get-configurations.outputs.environment-language-code }}
+      build-environment-azure-ad-group-name: ${{ steps.get-configurations.outputs.build-environment-azure-ad-group-name }}
+      dataverse-environment-description: '${{ steps.job-outputs-definition.outputs.dataverse-environment-description }}'
+      pac-cli-version: ${{ steps.get-configurations.outputs.pac-cli-version }}
+      custom-deployment-settings-file-name-base: ${{ steps.get-configurations.outputs.custom-deployment-settings-file-name-base }}
+      solution-checker-output-directory: ${{ steps.get-configurations.outputs.solution-checker-output-directory }}
+      solution-checker-geography: ${{ steps.get-configurations.outputs.solution-checker-geography }}
+      solution-checker-maximum-number-high-severity-points: ${{ steps.get-configurations.outputs.solution-checker-maximum-number-high-severity-points }}
+      solution-checker-maximum-number-medium-severity-points: ${{ steps.get-configurations.outputs.solution-checker-maximum-number-medium-severity-points }}
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Set a current date environment variable in the following format: YYYYMMDD
+    - name: Set current date as env variable
+      id: current_date
+      run: echo "::set-output name=NOW::$(date +'%Y%m%d')"
+      shell: pwsh
+    
+    # Action used to checkout the main branch in the current repository
+    #   Community action: https://github.com/actions/checkout
+    - name: Checkout
+      uses: actions/checkout@v3.3.0
+    
+    # Get configurations from a JSON file in the repository
+    - name: Get configurations
+      uses: ./.github/actions/get-configurations
+      id: get-configurations
+
+    # Set dataverse-environment-description job output
+    - name: Set dataverse-environment-description job output
+      id: job-outputs-definition
+      run: |
+        echo "==========  Set dataverse-environment-description job output =========="
+        $dataverseEnvironmentDescription = "${{ steps.get-configurations.outputs.build-environment-description-base }}"
+
+        if ($dataverseEnvironmentDescription -ne '') {
+          $dataverseEnvironmentDescription = "${{ steps.get-configurations.outputs.build-environment-description-base }}${{ env.solution_name }} / #${{github.event.number }} (${{ github.server_url }}/${{ github.repository }}/pull/${{github.event.number }})"
+        }
+          
+        echo "Dataverse environment description: $dataverseEnvironmentDescription"
+        echo "::set-output name=dataverse-environment-description::$dataverseEnvironmentDescription"
+      shell: pwsh
+
+    # Get changed solution from changed files
+    - name: Get changed solution
+      id: changed-solution
+      run: |
+        # Variables
+        $changedSolutionFound = $false
+        $filesChanged = gh pr view ${{github.event.number }} --json files --jq '.files.[].path'
+        $solutionName = ""
+        $solutionNameBackup = ""
+
+        Write-Host "========== Search updated solution in changed files =========="
+        foreach ($fileChanged in $filesChanged) {
+          Write-Host "$fileChanged"
+          $fileChangedArray = $fileChanged.Split("/")
+
+          if ($fileChanged.Contains("Solutions/") -and (-not($changedSolutionFound))) {
+            $solutionName = $fileChangedArray[1]
+          }
+
+          if ($fileChanged.Contains("Configurations/") -and (-not($changedSolutionFound))) {
+            $solutionNameBackup = $fileChangedArray[1]
+          }
+        }
+
+        if ($solutionName -eq "") {
+          Write-Host "⚠ Only configurations udpated"
+          $solutionName = $solutionNameBackup
+        }
+
+        echo "Solution name: $solutionName"
+        echo "::set-output name=solution_name::$solutionName"
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Job for the creation of a just in time Dataverse Build environment
+  create-build-environment:
+    needs: pre-job
+    uses: ./.github/workflows/create-dataverse-environment.yml
+    with:
+      environment-display-name-base: ${{ needs.pre-job.outputs.build-environment-display-name-base }}
+      environment-domain-name-base: ${{ needs.pre-job.outputs.build-environment-domain-name-base }}
+      environment-sku-name: ${{ needs.pre-job.outputs.build-environment-sku-name }}
+      environment-security-group-name: '${{ needs.pre-job.outputs.build-environment-azure-ad-group-name }}'
+      environment-region: ${{ needs.pre-job.outputs.environment-region }}
+      environment-currency-name: ${{ needs.pre-job.outputs.environment-currency-name }}
+      environment-language-code: ${{ needs.pre-job.outputs.environment-language-code }}
+      environment-description: '${{ needs.pre-job.outputs.dataverse-environment-description }}'
+      environment-name-unique-identifier: ${{ needs.pre-job.outputs.current-date }}
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+
+  # Job to build a managed version of a solution using a just-in-time Build environment
+  build-managed-solution:
+    needs: [pre-job, create-build-environment]
+    uses: ./.github/workflows/build-managed-solution.yml
+    with:
+      solution-name: ${{ needs.pre-job.outputs.solution-name }}
+      branch-to-checkout: ${{ github.head_ref }}
+      pac-cli-version: ${{ needs.pre-job.outputs.pac-cli-version }}
+      current-date: ${{ needs.pre-job.outputs.current-date }}
+      build-environment-url: ${{ needs.create-build-environment.outputs.environment-url }}
+      upload-unmanaged-solution-to-github-artifact-store: true
+      path-to-custom-deployment-settings-file: './Configurations/${{ needs.pre-job.outputs.solution-name }}/${{ needs.pre-job.outputs.custom-deployment-settings-file-name-base }}_validation.json'
+    secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+
+  # Job a for simple quality checks on the considered solution
+  solution-quality-checks:
+    needs: [pre-job, create-build-environment, build-managed-solution]
+    runs-on: windows-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Get the content of the GitHub artifact store prepared in a previous job
+    #   Action: https://docs.github.com/en/free-pro-team@latest/actions/guides/storing-workflow-data-as-artifacts
+    - name: Get solution from GH artifact store
+      uses: actions/download-artifact@v3
+      with:
+        name: unmanagedSolutions
+        path: out/unmanagedSolutions/
+
+    # Install the PowerShell modules we will need to execute the solution checker on the solution package generated in the previous step
+    - name: Get PowerShell modules
+      run: |
+        Install-Module -Name Microsoft.PowerApps.Administration.PowerShell -Force -Verbose -Scope CurrentUser
+        Install-Module -Name Microsoft.PowerApps.PowerShell -AllowClobber -Force -Verbose -Scope CurrentUser
+        Install-Module -Name Microsoft.PowerApps.Checker.PowerShell -Force -Verbose -Scope CurrentUser
+      shell: powershell
+
+    # Create the output folder for the results of the solution checker execution
+    # Add a Power Apps account to use the PowerShell Checker module
+    # Set some parameters to call the solution checker
+    # Invoke the solution checker
+    - name: Invoke solution checker
+      run: |
+        New-Item -ItemType Directory -Force -Path ${{ needs.pre-job.outputs.solution-checker-output-directory }}
+
+        Add-PowerAppsAccount -TenantID ${{ secrets.TENANT_ID }} -ApplicationId ${{ secrets.APPLICATION_ID }} -ClientSecret ${{ secrets.CLIENT_SECRET }}
+        
+        $rulesets = Get-PowerAppsCheckerRulesets -Geography ${{ needs.pre-job.outputs.solution-checker-geography }}
+        $rulesetToUse = $rulesets | where Name -NE 'AppSource Certification'
+        
+        $analyzeResult = Invoke-PowerAppsChecker `
+          -Geography ${{ needs.pre-job.outputs.solution-checker-geography }} `
+          -ClientApplicationId '${{ secrets.APPLICATION_ID }}' `
+          -TenantId '${{ secrets.TENANT_ID }}' `
+          -Ruleset $rulesetToUse `
+          -FileUnderAnalysis "out/unmanagedSolutions/${{ needs.pre-job.outputs.solution-name }}.zip" `
+          -OutputDirectory "${{ needs.pre-job.outputs.solution-checker-output-directory }}" `
+          -ClientApplicationSecret (ConvertTo-SecureString -AsPlainText -Force -String '${{ secrets.CLIENT_SECRET }}')
+      shell: powershell
+
+    # Unzip file generated by the solution checker execution
+    # Put the content of the sarif file generated by the solution checker execution in a variable
+    # Get the results of the solution checker execution
+    # Extract the number of the Medium and High severity points from the results of the solution checker execution
+    - name: Extract results of solution checker execution
+      run:  |
+        Get-ChildItem "${{ needs.pre-job.outputs.solution-checker-output-directory }}" -Filter *.zip | Expand-Archive -DestinationPath '${{ needs.pre-job.outputs.solution-checker-output-directory }}' -Force
+
+        $sarif_files = Get-ChildItem "${{ needs.pre-job.outputs.solution-checker-output-directory }}" -Filter *.sarif
+
+        foreach ($sarif_file in $sarif_files) {
+          $SolutionCheckerResultJson = Get-Content -Path ${{ needs.pre-job.outputs.solution-checker-output-directory }}/$sarif_file
+        }
+
+        $SolutionCheckerResult = $SolutionCheckerResultJson | ConvertFrom-Json
+        $results = $SolutionCheckerResult.runs.results
+
+        echo $results
+
+        $nbOfMediumSeverityPoints = 0
+        $nbOfHighSeverityPoints = 0
+
+        $results.foreach({
+          if($_.properties.severity -eq "Medium") {
+            $nbOfMediumSeverityPoints++
+          }
+          elseif($_.properties.severity -eq "High") {
+            $nbOfHighSeverityPoints++
+          }
+        })
+
+        Write-Host "Nb of Medium severity points: $nbOfMediumSeverityPoints"
+        Write-Host "Nb of High severity points: $nbOfHighSeverityPoints"
+
+        echo "NB_OF_MEDIUM_SEVERITY_POINTS=$nbOfMediumSeverityPoints" >> $Env:GITHUB_ENV
+        echo "NB_OF_HIGH_SEVERITY_POINTS=$nbOfHighSeverityPoints" >> $Env:GITHUB_ENV
+      shell: powershell
+        
+    # Add the new comment to the pull request if too many Medium or High severity points in the results of the solution checker execution
+    - name: New comment on pull request if too many errors
+      if: Env.NB_OF_MEDIUM_SEVERITY_POINTS > needs.pre-job.outputs.solution-checker-maximum-number-medium-severity-points || Env.NB_OF_HIGH_SEVERITY_POINTS > needs.pre-job.outputs.solution-checker-maximum-number-high-severity-points
+      uses: peter-evans/create-or-update-comment@v2
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
+          # ⚠ Too many Medium or High severity points in solution checker results!
+
+          Details:
+          - NB_OF_HIGH_SEVERITY_POINTS: ${{ env.NB_OF_HIGH_SEVERITY_POINTS }} (Max: ${{ needs.pre-job.outputs.solution-checker-maximum-number-high-severity-points }})
+          - NB_OF_MEDIUM_SEVERITY_POINTS: ${{ env.NB_OF_MEDIUM_SEVERITY_POINTS }} (Max: ${{ needs.pre-job.outputs.solution-checker-maximum-number-medium-severity-points }})
+    
+    # Run a command that will failed if too many Medium or High severity points in the results of the solution checker execution to stop the run
+    - name: Exit if too many notable points in solution checker results
+      if: Env.NB_OF_MEDIUM_SEVERITY_POINTS > needs.pre-job.outputs.solution-checker-maximum-number-medium-severity-points || Env.NB_OF_HIGH_SEVERITY_POINTS > needs.pre-job.outputs.solution-checker-maximum-number-high-severity-points
+      run: cd exit
+
+  # Job to delete the just in time Dataverse Build environment
+  delete-build-environment:
+    needs: [create-build-environment, build-managed-solution]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+    # Delete the just in time Dataverse Build environment associated to the issue
+    #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/delete-environment/action.yml
+    - name: Delete environment
+      uses: microsoft/powerplatform-actions/delete-environment@main
+      with:
+        app-id: ${{ secrets.APPLICATION_ID }}
+        client-secret: ${{ secrets.CLIENT_SECRET }}
+        tenant-id: ${{ secrets.TENANT_ID }}
+        environment-url: ${{ needs.create-build-environment.outputs.environment-url }}

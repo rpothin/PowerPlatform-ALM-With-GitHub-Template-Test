@@ -1,0 +1,251 @@
+# Copyright (c) 2020-2022 Raphael Pothin.
+# Licensed under the MIT License.
+
+name: create-dataverse-environment
+# Reusable workflow to create a Dataverse environment
+
+# Workflow triggered by another workflow
+on:
+  workflow_call:
+    inputs:
+      environment-display-name:
+        description: 'Display name of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-display-name-base:
+        description: 'Base of the display name of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-region:
+        description: 'Region of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-sku-name:
+        description: 'Type / SKU name of the Dataverse environment to create'
+        required: true
+        type: string
+      environment-currency-name:
+        description: 'Name of the default currency of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-language-code:
+        description: 'Display name of the default language of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-domain-name:
+        description: 'Domain name of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-domain-name-base:
+        description: 'Base of the domain name of the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-security-group-name:
+        description: 'Name of the Azure AD security group used to restrict the access to the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      environment-description:
+        description: 'Dataverse for the Dataverse environment to create'
+        required: false
+        type: string
+        default: ''
+      path-to-environment-configuration-file:
+        description: 'Path to the configuration file with details for the creation of the Dataverse environment (region, language, currency...)'
+        required: false
+        type: string
+        default: './Configurations/configurations.json'
+      issue-number:
+        description: 'Number of the considered issue'
+        required: false
+        type: string
+        default: ''
+      power-apps-maker-base-url:
+        description: 'Base of the URL of the Power Apps portal'
+        required: false
+        type: string
+        default: 'https://make.powerapps.com/environments/'
+      environment-name-unique-identifier:
+        description: 'Unique identifier for the display and domain name of the Dataverse environment to create, like the current date in YYYYMMDD format'
+        required: false
+        type: string
+        default: ''
+    #secrets: inherit
+      # APPLICATION_ID: Application ID that will be used to create the just-in-time Build environment
+      # CLIENT_SECRET: Client secret associated to the application ID that will be used to create the just-in-time Build environment
+      # TENANT_ID: Tenant ID where the application ID that will be used to create the just-in-time Build environment is located
+    outputs:
+      environment-url:
+        description: "URL of the new Dataverse environment"
+        value: ${{ jobs.create-dataverse-environment.outputs.environment-url }}
+      power-apps-maker-environment-url:
+        description: "URL of the Power Apps maker portal with the new Dataverse environment selected"
+        value: ${{ jobs.create-dataverse-environment.outputs.power-apps-maker-environment-url }}
+
+jobs:
+  # Job for the creation of a new Dataverse environment
+  create-dataverse-environment:
+    name: Create Dataverse environment
+    runs-on: windows-latest
+    outputs:
+      environment-url: ${{ steps.job-outputs-definition.outputs.environment-url }}
+      power-apps-maker-environment-url: ${{ steps.job-outputs-definition.outputs.power-apps-maker-environment-url }}
+    env:
+      RUNNER_DEBUG: 1
+
+    steps:
+      # Action used to checkout the main branch in the current repository
+      #   Community action: https://github.com/actions/checkout
+      - name: Checkout
+        if: ${{ inputs.environment-security-group-name != '' }}
+        uses: actions/checkout@v3.3.0
+
+      # Set a dataverse_environment_dynamic_display_name environment variable for the display name of the Dataverse environment to create
+      - name: Set dataverse_environment_dynamic_display_name as env variable
+        if: ${{ inputs.environment-name-unique-identifier != '' }}
+        run: |
+          $dataverseEnvironmentDynamicDisplayName = "${{ inputs.environment-display-name-base }}${{ inputs.environment-name-unique-identifier }} - ${{ github.run_number }}"
+          
+          echo "dataverse_environment_dynamic_display_name=$dataverseEnvironmentDynamicDisplayName" >> $Env:GITHUB_ENV
+        shell: pwsh
+      
+      # Set a dataverse_environment_dynamic_domain_name environment variable for the domain name of the Dataverse environment to create
+      - name: Set dataverse_environment_dynamic_domain_name as env variable
+        if: ${{ inputs.environment-name-unique-identifier != '' }}
+        run: |
+          $dataverseEnvironmentDynamicDomainName = "${{ inputs.environment-domain-name-base }}${{ inputs.environment-name-unique-identifier }}-${{ github.run_number }}"
+          
+          echo "dataverse_environment_dynamic_domain_name=$dataverseEnvironmentDynamicDomainName" >> $Env:GITHUB_ENV
+        shell: pwsh
+
+      # Set dataverse_environment_display_name and dataverse_environment_domain_name environment variables
+      - name: Set dataverse_environment_display_name and dataverse_environment_domain_name as env variables
+        run: |
+          echo "==========  Set dataverse_environment_display_name env variable =========="
+          $dataverseEnvironmentDisplayName = "${{ inputs.environment-display-name }}"
+
+          if ($dataverseEnvironmentDisplayName -eq '') {
+            $dataverseEnvironmentDisplayName = "${{ env.dataverse_environment_dynamic_display_name }}"
+            echo "Dynamic display name: $dataverseEnvironmentDisplayName"
+          } else {
+            echo "Provided display name: $dataverseEnvironmentDisplayName"
+          }
+          
+          echo "dataverse_environment_display_name=$dataverseEnvironmentDisplayName" >> $Env:GITHUB_ENV
+
+          echo "==========  Set dataverse_environment_domain_name env variable =========="
+          $dataverseEnvironmentDomainName = "${{ inputs.environment-domain-name }}"
+
+          if ($dataverseEnvironmentDomainName -eq '') {
+            $dataverseEnvironmentDomainName = "${{ env.dataverse_environment_dynamic_domain_name }}"
+            echo "Dynamic domain name: $dataverseEnvironmentDomainName"
+          } else {
+            echo "Provided domain name: $dataverseEnvironmentDomainName"
+          }
+          
+          echo "dataverse_environment_domain_name=$dataverseEnvironmentDomainName" >> $Env:GITHUB_ENV
+        shell: pwsh
+      
+      # Create the new Dataverse environment
+      #   Microsoft action: https://github.com/microsoft/powerplatform-actions/blob/main/create-environment/action.yml
+      - name: Create environment
+        id: create-environment
+        if: ${{ inputs.environment-security-group-name == '' }}
+        uses: microsoft/powerplatform-actions/create-environment@main
+        with:
+          app-id: ${{ secrets.APPLICATION_ID }}
+          client-secret: ${{ secrets.CLIENT_SECRET }}
+          tenant-id: ${{ secrets.TENANT_ID }}
+          name: ${{ env.dataverse_environment_display_name }}
+          region: ${{ inputs.environment-region }}
+          type: ${{ inputs.environment-sku-name }}
+          currency: ${{ inputs.environment-currency-name }}
+          language: ${{ inputs.environment-language-code }}
+          domain: ${{ env.dataverse_environment_domain_name }}
+
+      # Custom creation of a new Dataverse environment using PowerShell script
+      - name: Create environment (custom)
+        if: ${{ inputs.environment-security-group-name != '' }}
+        run: |
+          echo "========== Install Microsoft.PowerApps.Administration.PowerShel module =========="
+          Install-Module -Name Microsoft.PowerApps.Administration.PowerShell -Scope CurrentUser -Force
+
+          echo "==========  Set params =========="
+          $Params = @{
+            TenantId = "${{ secrets.TENANT_ID }}"
+            ClientId = "${{ secrets.APPLICATION_ID }}"
+            ClientSecret = "${{ secrets.CLIENT_SECRET }}"
+            DisplayName = "${{ env.dataverse_environment_display_name }}"
+            DomainName = "${{ env.dataverse_environment_domain_name }}"
+            Sku = "${{ inputs.environment-sku-name }}"
+            AzureADSecurityGroupName = "${{ inputs.environment-security-group-name }}"
+            Description = "${{ inputs.environment-description }}"
+            ConfigurationFilePath = "${{ inputs.path-to-environment-configuration-file }}"
+          }
+
+          echo "==========  New-DataverseEnvironment =========="
+          Import-Module ./Scripts/New-DataverseEnvironment.ps1 -Force
+
+          $dataverseEnvironmentDetails = New-DataverseEnvironment @Params -verbose
+
+          $dataverseEnvironmentDetails
+
+          echo "==========  Set environment variables for job outputs definition =========="
+          $dataverseEnvironmentUrl = $dataverseEnvironmentDetails.Internal.properties.linkedEnvironmentMetadata.instanceUrl
+          $dataverseEnvironmentUrl
+          echo "dataverse_environment_url=$dataverseEnvironmentUrl" >> $Env:GITHUB_ENV
+
+          $dataverseEnvironmentId = $dataverseEnvironmentDetails.EnvironmentName
+          $powerAppsMakerEnvironmentUrl = "${{ inputs.power-apps-maker-base-url }}$dataverseEnvironmentId/solutions"
+          $powerAppsMakerEnvironmentUrl
+          echo "power-apps-maker-environment-url=$powerAppsMakerEnvironmentUrl" >> $Env:GITHUB_ENV
+        shell: powershell
+
+      # Set environment-url and power-apps-maker-environment-url job outputs
+      - name: Set environment-url and power-apps-maker-environment-url job outputs
+        id: job-outputs-definition
+        run: |
+          echo "==========  Set environment-url job output =========="
+          $dataverseEnvironmentUrl = "${{ steps.create-environment.outputs.environment-url }}"
+
+          if ($dataverseEnvironmentUrl -eq '') {
+            $dataverseEnvironmentUrl = "${{ env.dataverse_environment_url }}"
+          }
+          
+          echo "Dataverse environment URL: $dataverseEnvironmentUrl"
+          echo "::set-output name=environment-url::$dataverseEnvironmentUrl"
+
+          echo "==========  Set power-apps-maker-environment-url job output =========="
+          $powerAppsMakerEnvironmentUrl = "${{ env.power-apps-maker-environment-url }}"
+
+          if ($powerAppsMakerEnvironmentUrl -eq '') {
+            $powerAppsMakerEnvironmentUrl = "${{ env.power-apps-maker-environment-url }}"
+          }
+
+          echo "Power Apps Maker Environment URL: $powerAppsMakerEnvironmentUrl"
+          echo "::set-output name=power-apps-maker-environment-url::$powerAppsMakerEnvironmentUrl"
+        shell: pwsh
+
+      # Add the 'dev env created' label to the current issue
+      #   GitHub Action on the Marketplace: https://github.com/marketplace/actions/simple-issue-labeler
+      - name: Add 'dev env created' label
+        if: ${{ inputs.issue-number != '' }}
+        uses: andymckay/labeler@master
+        with:
+          add-labels: 'dev env created'
+
+      # Add "Environment created" comment to the issue
+      - name: Environment created comment on issue
+        if: ${{ inputs.issue-number != '' }}
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ inputs.issue-number }}
+          body: |
+            🎉 Environment created!
