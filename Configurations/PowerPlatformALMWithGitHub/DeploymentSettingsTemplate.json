@@ -1,0 +1,12 @@
+{
+  "EnvironmentVariables": [],
+  "ConnectionReferences": [],
+  "Workflows": [],
+  "CanvasApps": [
+    {
+      "AadGroupId": "00000000-0000-0000-0000-000000000000",
+      "Name": "rpo_simplephoneapp_42101",
+      "RoleName": null
+    }
+  ]
+}
